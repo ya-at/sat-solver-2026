@@ -1,6 +1,7 @@
 import sys
 from threading import Event
 from utils import SATSolverResult, load_formula, lit_to_dimacs
+import random
 
 
 class Solver:
@@ -108,20 +109,89 @@ class Solver:
         UnitPropagate: распространить литералы trail[propagated:].
         Возвращает True, если найден конфликт (все литералы дизъюнкта ложны).
         """
-        raise NotImplementedError()
+        while self.propagated < len(self.trail):
+            lit = self.trail[self.propagated] ^ 1
+            for l in self.binary[lit]:
+                if self.values[l] == 1:
+                    continue
+                if self.values[l] == -1:
+                    return True
+                else:
+                    self.assign(l)
+
+            ws = self.watches[lit]
+            i = 0
+            while i < len(ws):
+                c1, c = ws[i]
+                if c[0] == lit:
+                    c[0], c[1] = c[1], c[0]
+                c1 = c[0]
+                ws[i][0] = c1
+                if self.values[c1] == 1:
+                    i += 1
+                    continue
+
+                new_ix = None
+                for ix in range(2, len(c)):
+                    if self.values[c[ix]] != -1:
+                        new_ix = ix
+                        break
+
+                if new_ix is not None:
+                    x = c[new_ix]
+                    c[1], c[new_ix] = x, lit
+                    self.watches[x].append([c1, c])
+
+                    ws[i] = ws[-1]
+                    ws.pop()
+                    continue
+
+                if self.values[c1] == -1:
+                    return True
+                self.assign(c1)
+                i += 1
+            self.propagated += 1
+        return False
 
     def choose_literal(self):
         """
         ChooseLiteral: литерал для следующего решения или None, если все
         переменные означены.
         """
-        raise NotImplementedError()
+        # maybe random?
+        for i in range(2, len(self.values), 2):
+            if self.values[i] == 0:
+                return i
+        return None
+
 
     def solve(self) -> SATSolverResult:
-        if self.sigkill.is_set():  # TODO: your code should check this predicate frequently! If it is set, you should return
-            return SATSolverResult.UNKNOWN
-        raise NotImplementedError()
-
+        self.build_watches()
+        if self.has_empty_clause:
+            return SATSolverResult.UNSAT
+        for lit in self.units:
+            if self.values[lit] == -1:
+                return SATSolverResult.UNSAT
+            if self.values[lit] == 0:
+                self.assign(lit)
+        iters_count = 0
+        while True:
+            iters_count += 1
+            if iters_count % 10_000 == 0 and self.sigkill.is_set():
+                return SATSolverResult.UNKNOWN
+            while self.propagate():
+                lvl = self.level()
+                if lvl == 0:
+                    return SATSolverResult.UNSAT
+                lit = self.decision(lvl)
+                self.backtrack(lvl - 1)
+                self.assign(lit ^ 1)
+                continue
+            lit = self.choose_literal()
+            if lit is None:
+                break
+            self.decide(lit)
+        return SATSolverResult.SAT
 
 if __name__ == "__main__":
     result = Solver(sys.argv[1], Event()).solve()
